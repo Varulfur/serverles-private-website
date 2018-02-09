@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  AWS CloudFormation template that deploys a website hosted on S3,
+  with a public homepage, and other pages needing a signed cookie. 
+  Signed cookie is obtained through API Gateway connected to Lambda.
+Parameters:
+  homepage:
+    Description: >-
+      Path to the homepage file of the front-end website, without the starting '/'
+      (e.g. index.html).
+    Type: String
+    Default: index.html
+Resources:
+  frontEndBucket:
+    Type: "AWS::S3::Bucket"
+# Configuration for CloudFront distribution in front of S3 website
+  OAIDistribution:
+    Type: "AWS::CloudFront::CloudFrontOriginAccessIdentity"
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: 'Access to S3 front-end for serverless-private-website'
+  frontEndBucketPolicy:
+    Type: "AWS::S3::BucketPolicy"
+    Properties:
+      Bucket: !Ref frontEndBucket
+      PolicyDocument:
+        Statement: 
+          - 
+            Action: 
+              - "s3:GetObject"
+            Effect: "Allow"
+            Resource: !Join
+                - ''
+                - 
+                  - !GetAtt frontEndBucket.Arn
+                  - "/*"
+            Principal:
+              AWS: !Join
+                - ''
+                - 
+                  - "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity "
+                  - !Ref OAIDistribution
+    DependsOn:
+      - frontEndBucket
+      - OAIDistribution
+  backEndAPI:
+    Type: "AWS::CloudFormation::Stack"
+    Properties:
+      # Parameters:
+        # AWS CloudFormation Stack Parameters
+      TemplateURL: XXXXX
+      TimeoutInMinutes: 3
+  distribution:
+    Type: "AWS::CloudFront::Distribution"
+    Properties:
+      DistributionConfig: 
+        # Aliases:
+          # - "my.website.com"
+        CacheBehaviors:
+          - AllowedMethods:
+              - "DELETE"
+              - "GET"
+              - "HEAD"
+              - "OPTIONS"
+              - "PATCH"
+              - "POST"
+              - "PUT"
+            CachedMethods:
+              - "HEAD"
+              - "GET"
+            Compress: false
+            DefaultTTL: 300
+            ForwardedValues:
+              Cookies:
+                Forward: all
+              Headers:
+                - '*'
+              QueryString: true
+            MaxTTL: 3600
+            MinTTL: 0
+            PathPattern: '/api/*'
+            TargetOriginId: api-gateway
+            ViewerProtocolPolicy: https-only
+          - AllowedMethods:
+              - "HEAD"
+              - "GET"
+            CachedMethods:
+              - "HEAD"
+              - "GET"
+            Compress: false
+            DefaultTTL: 300
+            ForwardedValues:
+              Cookies:
+                Forward: all
+              QueryString: true
+            MaxTTL: 3600
+            MinTTL: 0
+            PathPattern: !Join
+              - ''
+              - 
+                - '/'
+                - !Ref homepage
+            TargetOriginId: front-end-website
+            ViewerProtocolPolicy : redirect-to-https
+        Comment: >-
+          Distribution for serverless-private-website
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - "HEAD"
+            - "GET"
+          CachedMethods:
+            - "HEAD"
+            - "GET"
+          Compress: false
+          DefaultTTL: 300
+          ForwardedValues:
+            Cookies:
+              Forward: all
+            QueryString: true
+          MaxTTL: 3600
+          MinTTL: 0
+          TargetOriginId: front-end-website
+          TrustedSigners: # the rest of the website is only accessible if you have a signed cookie
+            - self
+          ViewerProtocolPolicy : redirect-to-https
+        DefaultRootObject: !Ref homepage
+        Enabled: true
+        # HttpVersion: http2
+        IPV6Enabled: true
+        Logging:
+          Bucket: !GetAtt eagleLogsBucket.DomainName
+          IncludeCookies: true
+          Prefix: cloudfront
+        Origins:
+          - CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+            DomainName: !Join
+              - ''
+              -
+                - !Ref backEndAPI
+                - '.execute-api.'
+                - !Ref "AWS::Region"
+                - '.amazonaws.com'
+            Id: api-gateway
+            OriginPath: "/prod"
+          - DomainName: !GetAtt frontEndBucket.DomainName
+            Id: front-end-website
+            S3OriginConfig:
+              OriginAccessIdentity:
+                !Sub "origin-access-identity/cloudfront/${OAIDistribution}"
+        PriceClass: PriceClass_100
+        # Used for geo-restriction only
+        Restrictions:
+          GeoRestriction:
+            RestrictionType: none
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+      # Tags: 
+        # - Tag
+    DependsOn:
+      - frontEndBucket
+      - backEndAPI
